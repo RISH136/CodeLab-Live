@@ -5,7 +5,8 @@ import { Server } from "socket.io";
 import jwt from 'jsonwebtoken';
 import mongoose from 'mongoose';
 import projectModel from './models/project.model.js';
-import {generateResult} from "./services/ai.service.js"
+import {generateResult, generateChatResult, generateCodeResult} from "./services/ai.service.js"
+
 
 const PORT=process.env.PORT || 3000;
 
@@ -15,7 +16,8 @@ const PORT=process.env.PORT || 3000;
 const server=http.createServer(app);
 const io=new Server(server,{
     cors:{
-        origin: '*'
+        origin: '*',
+        credentials: true,
     }
 });
 
@@ -60,33 +62,52 @@ io.on('connection', (socket)=>{
     socket.join(socket.roomId);
 
     socket.on('project-message',async (data) => {
+        try {
+            const message = data.message;
 
-        const message = data.message;
+            const aiIsPresentInMessage = message.includes('@ai');
+            const aiCodeIsPresentInMessage = message.includes('@ai_code');
 
-        const aiIsPresentInMessage = message.includes('@ai');
+            // If message triggers code mode (@ai_code)
+            if (aiCodeIsPresentInMessage) {
+                const prompt = message.replace('@ai_code', '').trim();
+                const result = await generateCodeResult(prompt);
+                io.to(socket.roomId).emit('project-message', {
+                    message: result,
+                    sender: {
+                        _id: 'ai',
+                        email: 'AI'
+                    }
+                })
+                return
+            }
 
-        if (aiIsPresentInMessage) {
+            // If message contains @ai (chat mode - no files)
+            if (aiIsPresentInMessage) {
+                const prompt = message.replace('@ai', '').trim();
+                const result = await generateChatResult(prompt);
+                io.to(socket.roomId).emit('project-message', {
+                    message: result,
+                    sender: {
+                        _id: 'ai',
+                        email: 'AI'
+                    }
+                })
+                return
+            }
 
-
-            const prompt = message.replace('@ai', '');
-
-            const result = await generateResult(prompt);
-
-
+            socket.broadcast.to(socket.roomId).emit('project-message', data)
+        } catch (error) {
+            console.error('Error in project-message handler:', error);
+            // Send error message to the user
             io.to(socket.roomId).emit('project-message', {
-                message: result,
+                message: `Sorry, I encountered an error: ${error.message}`,
                 sender: {
                     _id: 'ai',
                     email: 'AI'
                 }
             })
-
-
-            return
         }
-
-
-        socket.broadcast.to(socket.roomId).emit('project-message', data)
     })
 
     socket.on('event',()=>{

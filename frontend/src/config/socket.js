@@ -22,6 +22,18 @@ export const receiveMessage = (eventName, cb) => {
     socketInstance.on(eventName, cb);
 }
 
+export const offMessage = (eventName, cb) => {
+    if (!socketInstance) return;
+    socketInstance.off(eventName, cb);
+}
+
 export const sendMessage = (eventName, data) => {
     socketInstance.emit(eventName, data);
+}
+
+export const disconnectSocket = () => {
+    if (socketInstance) {
+        socketInstance.disconnect();
+        socketInstance = null;
+    }
 }

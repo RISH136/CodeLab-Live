@@ -2,9 +2,15 @@ import React, { useState, useEffect, useContext, useRef } from 'react'
 import { UserContext } from '../context/user.context'
 import { useNavigate, useLocation } from 'react-router-dom'
 import axios from '../config/axios'
-import { initializeSocket, receiveMessage, sendMessage } from '../config/socket'
+import { initializeSocket, receiveMessage, sendMessage, offMessage } from '../config/socket'
 import Markdown from 'markdown-to-jsx'
-import hljs from 'highlight.js';
+import hljs from 'highlight.js/lib/core'
+import javascript from 'highlight.js/lib/languages/javascript'
+hljs.registerLanguage('javascript', javascript)
+if (typeof window !== 'undefined') {
+    // Expose for any runtime highlighters relying on window.hljs
+    window.hljs = hljs
+}
 import { getWebContainer } from '../config/webContainer'
 
 
@@ -12,8 +18,8 @@ function SyntaxHighlightedCode(props) {
     const ref = useRef(null)
 
     React.useEffect(() => {
-        if (ref.current && props.className?.includes('lang-') && window.hljs) {
-            window.hljs.highlightElement(ref.current)
+        if (ref.current && props.className?.includes('lang-')) {
+            hljs.highlightElement(ref.current)
 
             // hljs won't reprocess the element unless this attribute is removed
             ref.current.removeAttribute('data-highlighted')
@@ -193,7 +199,7 @@ const Project = () => {
         }
 
 
-        receiveMessage('project-message', data => {
+        const onProjectMessage = (data) => {
 
             console.log(data)
             
@@ -204,13 +210,26 @@ const Project = () => {
 
                     console.log(message)
 
-                    webContainer?.mount(message.fileTree)
-
-                    if (message.fileTree) {
-                        setFileTree(message.fileTree || {})
+                    // Only mount and set fileTree if present (code mode)
+                    if (message && message.fileTree) {
+                        // Merge using functional update to avoid stale state and persist immediately
+                        setFileTree(prevFileTree => {
+                            const mergedFileTree = { ...prevFileTree, ...message.fileTree }
+                            console.log('Previous fileTree:', prevFileTree)
+                            console.log('New fileTree from AI:', message.fileTree)
+                            console.log('Merged fileTree:', mergedFileTree)
+                            webContainer?.mount(mergedFileTree)
+                            saveFileTree(mergedFileTree)
+                            return mergedFileTree
+                        })
+                        // Keep rich AI object when it contains fileTree
+                        setMessages(prevMessages => [ ...prevMessages, { ...data, message } ])
+                        return
                     }
-                    // Pass the parsed message object instead of raw data
-                    setMessages(prevMessages => [ ...prevMessages, { ...data, message: message } ]) // Update messages state
+
+                    // Chat mode: render as plain text bubble
+                    const chatText = message?.text || (typeof data.message === 'string' ? data.message : 'AI response')
+                    setMessages(prevMessages => [ ...prevMessages, { ...data, message: chatText } ])
                 } catch (error) {
                     console.error('Error parsing AI message:', error)
                     console.error('Raw message:', data.message)
@@ -218,24 +237,19 @@ const Project = () => {
                     // Try to extract just the text content as a fallback
                     try {
                         const fallbackText = data.message.match(/"text":\s*"([^"]+)"/)?.[1] || 
-                                           data.message.match(/"text":\s*"([^"]*(?:\\.[^"]*)*)"/)?.[1] ||
-                                           "Unable to parse AI response"
+                                           data.message.match(/"text":\s*"([^\"]*(?:\\.[^\"]*)*)"/)?.[1] ||
+                                           (typeof data.message === 'string' ? data.message : 'Unable to parse AI response')
                         
                         setMessages(prevMessages => [ ...prevMessages, { 
                             ...data, 
-                            message: { 
-                                text: fallbackText,
-                                error: true 
-                            } 
+                            message: fallbackText
                         } ])
                     } catch (fallbackError) {
                         // If even the fallback fails, show the raw message
+                        const raw = typeof data.message === 'string' ? data.message : JSON.stringify(data.message)
                         setMessages(prevMessages => [ ...prevMessages, { 
                             ...data, 
-                            message: { 
-                                text: `Error parsing AI response: ${error.message}`,
-                                error: true 
-                            } 
+                            message: raw
                         } ])
                     }
                 }
@@ -244,7 +258,9 @@ const Project = () => {
 
                 setMessages(prevMessages => [ ...prevMessages, data ]) // Update messages state
             }
-        })
+        }
+
+        receiveMessage('project-message', onProjectMessage)
 
 
         axios.get(`/projects/get-project/${location.state.project._id}`).then(res => {
@@ -265,6 +281,9 @@ const Project = () => {
 
         })
 
+        return () => {
+            offMessage('project-message', onProjectMessage)
+        }
     }, [])
 
     function saveFileTree(ft) {
@@ -293,6 +312,17 @@ const Project = () => {
             scrollToBottom()
         })
     }, [ messages ])
+
+    // Debug fileTree changes
+    useEffect(() => {
+        console.log('FileTree updated:', fileTree)
+        console.log('Current file:', currentFile)
+        if (currentFile && fileTree[currentFile]) {
+            console.log('Current file content:', fileTree[currentFile])
+        }
+    }, [fileTree, currentFile])
+
+    
 
     return (
         <main className='h-screen w-screen flex bg-gray-900 text-white'>
@@ -331,8 +361,13 @@ const Project = () => {
                             <div key={index} className={`${msg.sender._id === 'ai' ? 'max-w-80' : 'max-w-52'} ${msg.sender._id == user?._id?.toString() && 'ml-auto'}  message flex flex-col p-4 bg-gradient-to-br from-gray-700 to-gray-800 w-fit rounded-xl shadow-lg border border-gray-600`}>
                                 <small className='opacity-70 text-xs text-gray-300 mb-1'>{msg.sender.email}</small>
                                 <div className='text-sm text-gray-100'>
-                                    {msg.sender._id === 'ai' ?
-                                        WriteAiMessage(msg.message)
+                                    {msg.sender._id === 'ai'
+                                        ? (
+                                            // If AI provided a fileTree (code mode), use rich AI rendering; otherwise render like a normal message
+                                            msg?.message?.fileTree
+                                                ? WriteAiMessage(msg.message)
+                                                : <p className="leading-relaxed">{typeof msg.message === 'string' ? msg.message : msg?.message?.text}</p>
+                                        )
                                         : <p className="leading-relaxed">{msg.message}</p>}
                                 </div>
                             </div>
@@ -391,6 +426,9 @@ const Project = () => {
                                 <button
                                     key={index}
                                     onClick={() => {
+                                        console.log('Clicked file:', file)
+                                        console.log('Current fileTree:', fileTree)
+                                        console.log('File data:', fileTree[file])
                                         setCurrentFile(file)
                                         setOpenFiles([ ...new Set([ ...openFiles, file ]) ])
                                     }}
@@ -428,6 +466,31 @@ const Project = () => {
                         </div>
 
                         <div className="actions flex gap-3 p-2">
+                            <button
+                                onClick={() => {
+                                    const proposed = prompt('Enter new file name (e.g., app.js, Project.jsx, package.json)')
+                                    if (proposed === null) return
+                                    const name = proposed.trim()
+                                    if (!name) return
+                                    if (fileTree[ name ]) {
+                                        alert('A file with that name already exists.')
+                                        return
+                                    }
+                                    const initial = ''
+                                    const ft = {
+                                        ...fileTree,
+                                        [ name ]: { file: { contents: initial } }
+                                    }
+                                    setFileTree(ft)
+                                    saveFileTree(ft)
+                                    setCurrentFile(name)
+                                    setOpenFiles(prev => [ ...new Set([ ...prev, name ]) ])
+                                }}
+                                className='px-6 py-2 bg-blue-600 hover:bg-blue-700 text-white rounded-lg font-medium transition-all duration-200 shadow-lg hover:shadow-xl flex items-center gap-2'
+                            >
+                                <i className="ri-file-add-line"></i>
+                                New file
+                            </button>
                             <button
                                 onClick={async () => {
                                     if (isRunning) return; // Prevent multiple clicks
@@ -585,7 +648,7 @@ const Project = () => {
                                                 setFileTree(ft)
                                                 saveFileTree(ft)
                                             }}
-                                            dangerouslySetInnerHTML={{ __html: hljs.highlight('javascript', fileTree[ currentFile ].file.contents).value }}
+                                            dangerouslySetInnerHTML={{ __html: hljs.highlight(fileTree[ currentFile ]?.file?.contents || '', { language: 'javascript' }).value }}
                                             style={{
                                                 whiteSpace: 'pre-wrap',
                                                 paddingBottom: '25rem',
