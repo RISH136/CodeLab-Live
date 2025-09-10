@@ -3,6 +3,8 @@
 Codelab Live is a collaborative coding platform where users can create rooms, invite collaborators, and work together on code in real time. It also integrates AI assistance to generate and improve code, along with a built-in code execution feature.  
 
 🚀 **Deployed Frontend**: [codelab-live-frontend.vercel.app](https://codelab-live-frontend.vercel.app)
+🚀 **Deployed Frontend**:https://codelab-live-frontend-3.onrender.com
+
 
 ---
 
